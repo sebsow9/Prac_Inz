@@ -1,0 +1,10 @@
+FROM python:3.11-slim
+
+# ffmpeg - kodowanie /dekodowanie wideo
+# iproute2 - tc/netem - narzedzia do konfiguracji sieci
+# iputils-ping - tcpdump- diagnostyka
+RUN apt-get update && apt-get install -y ffmpeg iproute2 iputils-ping tcpdump && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+CMD ["sleep", "infinity"]

@@ -1,0 +1,33 @@
+services:
+  sender:
+    build: .
+    container_name: h264_sender
+    hostname: sender
+    cpuset: "0,1"
+    mem_limit: 2g
+    cap_add:
+      - NET_ADMIN
+    networks:
+      - video_net
+    volumes:
+      - ./videos:/videos:ro
+      - ./results:/results
+      - ./sender:/app
+
+  receiver:
+    build: .
+    container_name: h264_receiver
+    hostname: receiver
+    cpuset: "2,3"
+    mem_limit: 2g
+    cap_add:
+      - NET_ADMIN
+    networks:
+      - video_net
+    volumes:
+      - ./results:/results
+      - ./receiver:/app
+
+networks:
+  video_net:
+    driver: bridge
