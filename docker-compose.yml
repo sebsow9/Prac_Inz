@@ -3,12 +3,11 @@ services:
     build: .
     container_name: h264_sender
     hostname: sender
-    cpuset: "0,1"
-    mem_limit: 2g
-    cap_add:
-      - NET_ADMIN
-    networks:
-      - video_net
+    cpus: 2
+    cpuset: "${SENDER_CPUSET:-0,1}"
+    mem_limit: "${SENDER_MEM:-2g}"
+    cap_add: [NET_ADMIN]
+    networks: [video_net]
     volumes:
       - ./videos:/videos:ro
       - ./results:/results
@@ -18,12 +17,11 @@ services:
     build: .
     container_name: h264_receiver
     hostname: receiver
-    cpuset: "2,3"
-    mem_limit: 2g
-    cap_add:
-      - NET_ADMIN
-    networks:
-      - video_net
+    cpus: 0.1
+    cpuset: "${RECEIVER_CPUSET:-2,3}"
+    mem_limit: "${RECEIVER_MEM:-2g}"
+    cap_add: [NET_ADMIN]
+    networks: [video_net]
     volumes:
       - ./results:/results
       - ./receiver:/app
