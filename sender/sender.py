@@ -15,6 +15,7 @@ import time
 import cryptography
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM, ChaCha20Poly1305
+from cryptography.hazmat.primitives.asymmetric.mlkem import MLKEM768PrivateKey
 from cryptography.hazmat.primitives.padding import PKCS7
 from diffiehellman import DiffieHellman
 
@@ -129,6 +130,19 @@ def wymiana_klucza(sock, tryb):
         sekret = dh.generate_shared_key(peer_pub)
         t3 = time.perf_counter_ns()
         return sekret[:32], t1 - t0, t2 - t1, t3 - t2
+
+    if tryb == "ml-kem-768":
+        t0 = time.perf_counter_ns()
+        klucz_prywatny = MLKEM768PrivateKey.generate()
+        moj_pub = klucz_prywatny.public_key().public_bytes_raw()
+        t1 = time.perf_counter_ns()
+        sock.sendto(moj_pub, (DEST, PORT_RX))
+
+        kapsula, _addr = sock.recvfrom(8192)
+        t2 = time.perf_counter_ns()
+        sekret = klucz_prywatny.decapsulate(kapsula)
+        t3 = time.perf_counter_ns()
+        return sekret, t1 - t0, t2 - t1, t3 - t2
 
     raise NotImplementedError(f"nieobslugiwany tryb wymiany: {tryb}")
 
@@ -254,4 +268,5 @@ def main():
     sock.close()
 
 
-main()
+if __name__ == "__main__":
+    main()

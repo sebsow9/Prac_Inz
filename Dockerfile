@@ -8,7 +8,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* \
  && pip install --upgrade pip \
  && pip install \
-      cryptography==46.0.6 \
+      cryptography==48.0.0 \
       py-diffie-hellman==1.0.1 \
       python-ffmpeg
 

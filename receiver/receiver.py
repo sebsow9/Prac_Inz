@@ -12,6 +12,7 @@ import subprocess
 import time
 
 from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.asymmetric.mlkem import MLKEM768PublicKey
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM, ChaCha20Poly1305
 from cryptography.hazmat.primitives.padding import PKCS7
@@ -94,6 +95,12 @@ def wymiana_klucza(sock, tryb, pierwszy, addr):
         dh = DiffieHellman(group=grupa)
         sock.sendto(dh.get_public_key(), (addr[0], PORT_TX))
         return dh.generate_shared_key(pierwszy)[:32]
+
+    if tryb == "ml-kem-768":
+        klucz_publiczny = MLKEM768PublicKey.from_public_bytes(pierwszy)
+        sekret, kapsula = klucz_publiczny.encapsulate()
+        sock.sendto(kapsula, (addr[0], PORT_TX))
+        return sekret
 
     raise NotImplementedError(f"nieobslugiwany tryb wymiany: {tryb}")
 
@@ -230,4 +237,5 @@ def main():
     print(json.dumps(metryki))
 
 
-main()
+if __name__ == "__main__":
+    main()

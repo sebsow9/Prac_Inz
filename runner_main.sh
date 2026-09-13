@@ -13,7 +13,7 @@
 # ============================== USTAWIENIA ==============================
 ITERACJE="${ITERACJE:-3}"
 SZYFRY="${SZYFRY:-brak xor aes-ecb aes-ctr aes-cbc aes-gcm chacha20-poly1305}"
-WYMIANY="${WYMIANY:-wspoldzielony dh-768 dh-2048}"
+WYMIANY="${WYMIANY:-wspoldzielony dh-768 dh-2048 ml-kem-768}"
 CPU_NAD="${CPU_NAD:-0.2}"          # limity CPU nadajnika
 CPU_ODB="${CPU_ODB:-0.2}"          # limity CPU odbiornika (iloczyn = kombinacje)
 FILENAME="${FILENAME:-leaves2}"

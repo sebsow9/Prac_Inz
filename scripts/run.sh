@@ -24,7 +24,7 @@ case "$CIPHER" in
     *) echo "BLAD: nieznany szyfr '$CIPHER'" >&2; exit 1 ;;
 esac
 case "$KEX" in
-    wspoldzielony|dh-768|dh-2048) ;;
+    wspoldzielony|dh-768|dh-2048|ml-kem-768) ;;
     *) echo "BLAD: nieznany tryb wymiany '$KEX'" >&2; exit 1 ;;
 esac
 

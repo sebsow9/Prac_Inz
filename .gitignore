@@ -1,0 +1,50 @@
+# Secrets and local crypto material
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+keys/
+secrets/
+
+# Local Hermes project context and experiment record
+/.hermes.md
+/EXPERIMENT.md
+
+# Python and tooling
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Large inputs, generated video and experiment artifacts
+data/
+results/
+artifacts/
+logs/
+*.log
+*.tmp
+*.bak
+*.h264
+*.264
+*.avc
+*.mp4
+*.mkv
+*.mov
+*.yuv
+*.rgb
+*.bin
+*.csv
+*.jsonl
+
+# Preserve small, intentionally versioned manifests/configs
+!data/.gitkeep
+!results/.gitkeep
+!artifacts/.gitkeep
+!configs/**/*.json
+!configs/**/*.yaml
+!configs/**/*.yml
