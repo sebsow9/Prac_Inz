@@ -12,6 +12,7 @@ secrets/
 # Local Hermes project context and experiment record
 /.hermes.md
 /EXPERIMENT.md
+/docs/
 
 # Python and tooling
 __pycache__/
