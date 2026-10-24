@@ -1,9 +1,13 @@
+name: h264proj_rtp
+
 services:
   sender:
-    build: .
-    container_name: h264_sender
+    build:
+      context: .
+      target: runtime
+    container_name: h264_rtp_sender
     hostname: sender
-    cpus: 2
+    cpus: "${SENDER_CPUS:-2}"
     cpuset: "${SENDER_CPUSET:-0,1}"
     mem_limit: "${SENDER_MEM:-2g}"
     cap_add: [NET_ADMIN]
@@ -14,10 +18,12 @@ services:
       - ./sender:/app
 
   receiver:
-    build: .
-    container_name: h264_receiver
+    build:
+      context: .
+      target: runtime
+    container_name: h264_rtp_receiver
     hostname: receiver
-    cpus: 0.1
+    cpus: "${RECEIVER_CPUS:-0.1}"
     cpuset: "${RECEIVER_CPUSET:-2,3}"
     mem_limit: "${RECEIVER_MEM:-2g}"
     cap_add: [NET_ADMIN]

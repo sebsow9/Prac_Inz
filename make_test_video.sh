@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 set -euo pipefail
 
 OUT_DIR="$(dirname "$0")/videos"

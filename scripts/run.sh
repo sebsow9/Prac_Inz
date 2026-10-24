@@ -9,6 +9,11 @@ FILENAME="${FILENAME:-leaves2}"
 CIPHER="${CIPHER:-xor}"
 KEX="${KEX:-wspoldzielony}"
 CHUNK_B="${CHUNK_B:-1400}"
+TRANSPORT="${TRANSPORT:-rtp}"
+RESULT_TAG="$TRANSPORT"
+[ "$TRANSPORT" = "rtp" ] && RESULT_TAG="rtp_udp"
+RTP_PACKET_B="${RTP_PACKET_B:-1400}"
+case "$TRANSPORT" in raw|rtp) ;; *) echo "BLAD: TRANSPORT=raw albo rtp" >&2; exit 1 ;; esac
 NETEM_DELAY_MS="${NETEM_DELAY_MS:-0}"
 NETEM_LOSS_PCT="${NETEM_LOSS_PCT:-0}"
 PROFIL="${PROFIL:-domyslny}"
@@ -29,7 +34,7 @@ case "$KEX" in
 esac
 
 RUN_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-RUN_ID="${RUN_ID:-$(date -u +%Y%m%d-%H%M%S)-${CIPHER}-${KEX}}"
+RUN_ID="${RUN_ID:-$(date -u +%Y%m%d-%H%M%S)-${TRANSPORT}-p${RTP_PACKET_B}-${CIPHER}-${KEX}}"
 
 # ---------------------------------------------------------- katalog roboczy
 # Wszystko posrednie laduje tutaj i znika przy wyjsciu ze skryptu, takze po
@@ -46,7 +51,7 @@ trap sprzataj EXIT
 
 SRC_MP4="${PROJ}/videos/${FILENAME}.mp4"
 OUT_MP4="${SCRATCH}/out.mp4"
-JSONL="${PROJ}/results/pomiary.jsonl"
+JSONL="${JSONL:-${PROJ}/results/pomiary_${RESULT_TAG}.jsonl}"
 mkdir -p "${PROJ}/results"
 
 # Kontener zapisuje mp4 przez wspolny wolumen ./results:/results, wiec musi
@@ -55,13 +60,19 @@ OUT_W_KONTENERZE="/results/.tmp_${RUN_ID}.mp4"
 OUT_NA_HOSCIE="${PROJ}/results/.tmp_${RUN_ID}.mp4"
 
 FPS=$(ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate \
-      -of csv=p=0 "$SRC_MP4" | awk -F'/' '{if ($2) printf "%.0f", $1/$2; else print $1}')
+      -of csv=p=0 "$SRC_MP4")
+python3 -c 'from fractions import Fraction; import sys; assert Fraction(sys.argv[1]) > 0' "$FPS" || exit 1
 
-echo "== ${RUN_ID} (szyfr=${CIPHER}, wymiana=${KEX}, profil=${PROFIL}, netem=${NETEM_DELAY_MS}ms/${NETEM_LOSS_PCT}%, fps=${FPS})"
+echo "== ${RUN_ID} (transport=${TRANSPORT}, RTPmax=${RTP_PACKET_B}B, szyfr=${CIPHER}, wymiana=${KEX}, profil=${PROFIL}, netem=${NETEM_DELAY_MS}ms/${NETEM_LOSS_PCT}%, fps=${FPS})"
 
-docker compose up -d >/dev/null 2>&1
+docker compose up -d >/dev/null 2>&1 || { echo "BLAD: start kontenerow" >&2; exit 1; }
 docker compose exec -T sender   pkill -f sender.py   2>/dev/null || true
 docker compose exec -T receiver pkill -f receiver.py 2>/dev/null || true
+
+# Usuwamy procesy poprzedniej proby tylko w kontenerach tej kopii.
+for service in sender receiver; do
+    docker compose exec -T "$service" pkill -x ffmpeg 2>/dev/null || true
+done
 
 # ------------------------------------------------------------------ netem
 # UWAGA: netem wisi na NADAJNIKU, nie odbiorniku. Root qdisc ksztaltuje ruch
@@ -80,12 +91,14 @@ fi
 docker compose exec -T receiver env \
     RUN_ID="$RUN_ID" OUTPUT="$OUT_W_KONTENERZE" FPS="$FPS" CIPHER="$CIPHER" \
     KEX="$KEX" CHUNK_B="$CHUNK_B" PROFIL="$PROFIL" \
+    TRANSPORT="$TRANSPORT" RTP_PACKET_B="$RTP_PACKET_B" \
     python3 /app/receiver.py > "${SCRATCH}/receiver.raw" 2> "${SCRATCH}/receiver.err" &
 RECEIVER_PID=$!
 
 docker compose exec -T sender env \
     RUN_ID="$RUN_ID" INPUT="/videos/${FILENAME}.mp4" CIPHER="$CIPHER" \
     KEX="$KEX" CHUNK_B="$CHUNK_B" PROFIL="$PROFIL" \
+    TRANSPORT="$TRANSPORT" RTP_PACKET_B="$RTP_PACKET_B" \
     python3 /app/sender.py > "${SCRATCH}/sender.raw" 2> "${SCRATCH}/sender.err"
 STATUS_SENDER=$?
 
@@ -113,16 +126,9 @@ mv "$OUT_NA_HOSCIE" "$OUT_MP4" 2>/dev/null || {
     echo "BLAD: brak pliku wyjsciowego" >&2; exit 1; }
 
 # ------------------------------------------------------------------ jakosc
-ffmpeg -v error -i "$OUT_MP4" -pix_fmt yuv420p "${SCRATCH}/out.y4m" -y
-ffmpeg -v error -i "$SRC_MP4" -pix_fmt yuv420p "${SCRATCH}/ref.y4m" -y
-
-vmaf -r "${SCRATCH}/ref.y4m" -d "${SCRATCH}/out.y4m" --model version=vmaf_v0.6.1 \
-     -o "${SCRATCH}/vmaf.json" --json --quiet
-
-ffmpeg -hide_banner -loglevel error -i "$OUT_MP4" -i "$SRC_MP4" \
-       -lavfi psnr=stats_file="${SCRATCH}/psnr.log" -f null -
-ffmpeg -hide_banner -loglevel error -i "$OUT_MP4" -i "$SRC_MP4" \
-       -lavfi ssim=stats_file="${SCRATCH}/ssim.log" -f null -
+# Wszystkie metryki korzystaja z tej samej pary klatek. Przy niepelnej
+# transmisji zachowujemy metryki transportu, a jakosc oznaczamy jako niewazna.
+python3 scripts/quality.py "$SRC_MP4" "$OUT_MP4" "$SCRATCH" "$FPS" || exit 1
 
 # ------------------------------------------------------------------ scalanie
 SCRATCH="$SCRATCH" JSONL="$JSONL" RUN_TS="$RUN_TS" \

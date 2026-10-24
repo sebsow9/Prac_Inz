@@ -49,3 +49,19 @@ logs/
 !configs/**/*.json
 !configs/**/*.yaml
 !configs/**/*.yml
+# Keep documentation, test assets and personal artifacts local.
+*.md
+*.xlsx
+*.xls
+*.ods
+*.pptx
+*.ppt
+*.pdf
+*.docx
+*.doc
+*.tar.gz
+*.zip
+tests/
+pytest.ini
+native/
+vmaf-*/

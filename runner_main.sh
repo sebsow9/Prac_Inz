@@ -14,13 +14,21 @@
 ITERACJE="${ITERACJE:-3}"
 SZYFRY="${SZYFRY:-brak xor aes-ecb aes-ctr aes-cbc aes-gcm chacha20-poly1305}"
 WYMIANY="${WYMIANY:-wspoldzielony dh-768 dh-2048 ml-kem-768}"
-CPU_NAD="${CPU_NAD:-0.2}"          # limity CPU nadajnika
-CPU_ODB="${CPU_ODB:-0.2}"          # limity CPU odbiornika (iloczyn = kombinacje)
-FILENAME="${FILENAME:-leaves2}"
-NETEM_DELAY_MS="${NETEM_DELAY_MS:-0.5}"  # opoznienie sieci dla CALEJ serii
-NETEM_LOSS_PCT="${NETEM_LOSS_PCT:-0.5}"  # straty pakietow dla CALEJ serii
+CPU_NAD="${CPU_NAD:-0.2 0.5 1}"          # limity CPU nadajnika
+CPU_ODB="${CPU_ODB:-0.2 0.5 1}"          # limity CPU odbiornika (iloczyn = kombinacje)
+FILENAME="${FILENAME:-new_leaves}"
+NETEM_DELAY_MS="${NETEM_DELAY_MS:-0}"  # opoznienie sieci dla CALEJ serii
+NETEM_LOSS_PCT="${NETEM_LOSS_PCT:-0}"  # straty pakietow dla CALEJ serii
 LIMIT_S="${LIMIT_S:-300}"              # twardy limit czasu na jeden przebieg
 # ========================================================================
+
+export SERIES_ID="${SERIES_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
+CHUNK_B="${CHUNK_B:-1400}"
+export CHUNK_B
+export TRANSPORT="${TRANSPORT:-rtp}"
+RESULT_TAG="$TRANSPORT"
+[ "$TRANSPORT" = "rtp" ] && RESULT_TAG="rtp_udp"
+export RTP_PACKET_B="${RTP_PACKET_B:-1400}"
 
 set -uo pipefail          # bez -e: nieudany przebieg nie ubija serii
 
@@ -32,10 +40,12 @@ else
     exit 1
 fi
 cd "$PROJ"
+XLSX="${XLSX:-${PROJ}/pomiary_${RESULT_TAG}.xlsx}"
 
-LOG="${PROJ}/results/seria.log"
-BLEDY="${PROJ}/results/seria_bledy.log"
-JSONL="${PROJ}/results/pomiary.jsonl"
+LOG="${PROJ}/results/seria_${TRANSPORT}.log"
+BLEDY="${PROJ}/results/seria_bledy_${TRANSPORT}.log"
+JSONL="${JSONL:-${PROJ}/results/pomiary_${RESULT_TAG}.jsonl}"
+export JSONL
 mkdir -p "${PROJ}/results"
 
 # ------------------------------------------------------------ kontrola wstepna
@@ -82,7 +92,7 @@ if [ "${DRY_RUN:-0}" = "1" ]; then
     for it in $(seq 1 "$ITERACJE"); do
       for scpu in $CPU_NAD; do for rcpu in $CPU_ODB; do
         for kex in $WYMIANY; do for szyfr in $SZYFRY; do
-          echo "  i${it}_n${scpu}-o${rcpu}_${kex}_${szyfr}_d${NETEM_DELAY_MS}_s${NETEM_LOSS_PCT}"
+          echo "  ${SERIES_ID}_${FILENAME}_${TRANSPORT}_p${RTP_PACKET_B}_b${CHUNK_B}_i${it}_n${scpu}-o${rcpu}_${kex}_${szyfr}_d${NETEM_DELAY_MS}_s${NETEM_LOSS_PCT}"
         done; done
       done; done
     done
@@ -106,7 +116,7 @@ uruchom() {
 
     if grep -qF "\"nr\": \"${run_id}\"" "$JSONL" 2>/dev/null; then
         pominiete=$(( pominiete + 1 ))
-        return 0
+        return 2
     fi
 
     printf "\r  [%s] >> %-58s" "$(date +%H:%M:%S)" "$run_id"
@@ -118,8 +128,9 @@ uruchom() {
        timeout "$LIMIT_S" ./scripts/run.sh >> "$LOG" 2>&1 < /dev/null
     then
         return 0
+    else
+        local kod=$?
     fi
-    local kod=$?
 
     echo "" >&2
     if [ "$kod" = "124" ]; then
@@ -155,9 +166,13 @@ for it in $(seq 1 "$ITERACJE"); do
 
         for kex in $WYMIANY; do
           for szyfr in $SZYFRY; do
-            run_id="i${it}_${profil}_${kex}_${szyfr}_d${NETEM_DELAY_MS}_s${NETEM_LOSS_PCT}"
+            run_id="${SERIES_ID}_${FILENAME}_${TRANSPORT}_p${RTP_PACKET_B}_b${CHUNK_B}_i${it}_${profil}_${kex}_${szyfr}_d${NETEM_DELAY_MS}_s${NETEM_LOSS_PCT}"
             if uruchom "$run_id" "$profil" "$scpu" "$rcpu" "$kex" "$szyfr"; then
                 zrobione=$(( zrobione + 1 ))
+                python3 scripts/jsonl_xlsx.py "$JSONL" "$XLSX" >> "$LOG" 2>&1 || {
+                    echo "BLAD: eksport do Excela. Surowe dane sa w $JSONL" >&2
+                    exit 1
+                }
             fi
 
             minelo=$(( $(date +%s) - start ))
@@ -175,4 +190,4 @@ echo
 echo "Zakonczono: ok=$zrobione pominiete=$pominiete bledy=$nieudane"
 echo "Import:  python3 scripts/jsonl_xlsx.py results/pomiary.jsonl pomiary.xlsx"
 [ "$nieudane" -gt 0 ] && echo "Nieudane przebiegi: $BLEDY"
-exit 0
+[ "$nieudane" -eq 0 ]

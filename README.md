@@ -1,1 +1,0 @@
-Praca inzynierska, szyfrowanie wideo w standardzie H.264, pomiary i porownanie wynikow

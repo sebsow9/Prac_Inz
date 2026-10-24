@@ -12,6 +12,8 @@ import struct
 import subprocess
 import time
 
+from transport import validate_config, video_source
+
 import cryptography
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM, ChaCha20Poly1305
@@ -19,22 +21,22 @@ from cryptography.hazmat.primitives.asymmetric.mlkem import MLKEM768PrivateKey
 from cryptography.hazmat.primitives.padding import PKCS7
 from diffiehellman import DiffieHellman
 
-RESULTS = "/results"
+RESULTS = os.environ.get("RESULTS_DIR", "/results")
 RUN_ID = os.environ.get("RUN_ID", "run")
 INPUT = os.environ.get("INPUT", "/videos/default.mp4")
 CIPHER = os.environ.get("CIPHER", "xor")
 KEX = os.environ.get("KEX", "wspoldzielony")
 CHUNK_B = int(os.environ.get("CHUNK_B", "1388"))
+TRANSPORT = os.environ.get("TRANSPORT", "rtp")
+RTP_PACKET_B = int(os.environ.get("RTP_PACKET_B", "1400"))
 
-DEST = "receiver"
+DEST = os.environ.get("DEST", "receiver")
 PORT_RX = 4445   # tu sluchá receiver
 PORT_TX = 4446   # tu sluchamy my
 
-# Rozmiary narzutu per pakiet. CHUNK_B = 1388 daje w najgorszym przypadku
-# 1388 + 16 IV + 16 padding = 1420 B, + 28 B naglowkow IP/UDP = 1448 B < MTU 1500.
-# Dzieki temu zaden tryb nie powoduje fragmentacji IP - inaczej porownanie
-# szyfrow bylo by obciazone roznica w liczbie ramek ethernetowych, a nie w koszcie
-# kryptografii.
+# RTP_PACKET_B obejmuje naglowek RTP. Przy limicie 1400 B,
+# naglowku pomiarowym 12 B i najwiekszym narzucie szyfru
+# datagram UDP ma maksymalnie 1440 B (IPv4 MTU 1500).
 
 # --------------------------------------------------------------- docker
 def _czytaj(sciezka):
@@ -124,7 +126,7 @@ def wymiana_klucza(sock, tryb):
         moj_pub = dh.get_public_key()
         t1 = time.perf_counter_ns()
         sock.sendto(moj_pub, (DEST, PORT_RX))
-        
+
         peer_pub, _addr = sock.recvfrom(8192)
         t2 = time.perf_counter_ns()
         sekret = dh.generate_shared_key(peer_pub)
@@ -198,74 +200,65 @@ def zrob_szyfr(tryb, klucz):
 
 # ------------------------------------------------------------------ main
 def main():
+    validate_config(TRANSPORT, RTP_PACKET_B)
+    os.makedirs(RESULTS, exist_ok=True)
     ffmpeg = [
-        "ffmpeg", "-re", "-i", INPUT, "-an",
+        "ffmpeg", "-nostdin", "-re", "-i", INPUT, "-an",
         "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
-        "-bsf:v", "dump_extra=freq=keyframe",
-        "-f", "h264", "pipe:1",
+        "-bsf:v", "dump_extra=freq=keyframe", "-fps_mode", "passthrough",
     ]
-
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(("", PORT_TX))
-
-    bariera(sock)
-    sock.settimeout(10)
-
-    klucz, gen_ns, wym_ns, wyp_ns = wymiana_klucza(sock, KEX)
-    szyfruj = zrob_szyfr(CIPHER, klucz)
-
-    proc = subprocess.Popen(
-        ffmpeg, stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-    )
-
-    pakiety = 0
-    bajty_pt = 0
-    szyfrowanie_ns = 0
-    t_start = time.perf_counter_ns()
-    seq = 0
-    while True:
-        chunk = proc.stdout.read(CHUNK_B)
-        if not chunk:
-            break
-        t_a = time.perf_counter_ns()
-        naglowek = struct.pack("!IQ", seq, t_a)     # 12 B, wewnatrz jawnego tekstu
-        payload = szyfruj(naglowek +chunk)
-        szyfrowanie_ns += time.perf_counter_ns() - t_a
-        sock.sendto(payload, (DEST, PORT_RX))
-        pakiety += 1
-        bajty_pt += len(chunk)
-        seq += 1
-
-    transmisja_ns = time.perf_counter_ns() - t_start
-    proc.wait()
-
-    # sygnal konca - receiver konczy od razu, zamiast czekac na timeout
-    for _ in range(5):
-        sock.sendto(b"FIN", (DEST, PORT_RX))
-
+    try:
+        bariera(sock)
+        sock.settimeout(10)
+        klucz, gen_ns, wym_ns, wyp_ns = wymiana_klucza(sock, KEX)
+        ready, _ = sock.recvfrom(64)
+        if ready != b"READY":
+            raise RuntimeError("Receiver did not confirm video readiness")
+        szyfruj = zrob_szyfr(CIPHER, klucz)
+        pakiety = bajty_pt = bajty_udp = szyfrowanie_ns = max_udp = 0
+        t_start = time.perf_counter_ns()
+        log_path = f"{RESULTS}/{RUN_ID}.encoder.log"
+        with video_source(ffmpeg, TRANSPORT, RTP_PACKET_B, CHUNK_B, log_path) as chunks:
+            for seq, chunk in enumerate(chunks):
+                t_a = time.perf_counter_ns()
+                naglowek = struct.pack("!IQ", seq, t_a)
+                payload = szyfruj(naglowek + chunk)
+                szyfrowanie_ns += time.perf_counter_ns() - t_a
+                if TRANSPORT == "rtp" and len(payload) > 1472:
+                    raise RuntimeError("Encrypted UDP datagram exceeds IPv4 MTU 1500")
+                sock.sendto(payload, (DEST, PORT_RX))
+                pakiety += 1
+                bajty_pt += len(chunk)
+                bajty_udp += len(payload)
+                max_udp = max(max_udp, len(payload))
+        transmisja_ns = time.perf_counter_ns() - t_start
+        for _ in range(5):
+            sock.sendto(b"FIN", (DEST, PORT_RX))
+    finally:
+        sock.close()
     lim = limity_cpu()
     metryki = {
         "run_id": RUN_ID,
         "wideo": os.path.splitext(os.path.basename(INPUT))[0],
-        "tryb_szyfru": CIPHER,
-        "tryb_wymiany": KEX,
-        "chunk_B": CHUNK_B,
-        "gen_klucza_ns": gen_ns,
-        "wymiana_ns": wym_ns,
-        "wyprowadzenie_ns": wyp_ns,
-        "szyfrowanie_ns": szyfrowanie_ns,
-        "pakiety_wyslane": pakiety,
-        "bajty_jawne": bajty_pt,
+        "tryb_szyfru": CIPHER, "tryb_wymiany": KEX,
+        "transport": TRANSPORT,
+        "chunk_B": CHUNK_B if TRANSPORT == "raw" else None,
+        "rtp_packet_B": RTP_PACKET_B if TRANSPORT == "rtp" else None,
+        "rtp_io": "loopback-udp" if TRANSPORT == "rtp" else None,
+        "_rtcp": "local-BYE-only" if TRANSPORT == "rtp" else None,
+        "gen_klucza_ns": gen_ns, "wymiana_ns": wym_ns,
+        "wyprowadzenie_ns": wyp_ns, "szyfrowanie_ns": szyfrowanie_ns,
+        "pakiety_wyslane": pakiety, "bajty_jawne": bajty_pt,
+        "bajty_udp": bajty_udp, "_max_datagram_B": max_udp,
         "transmisja_ns": transmisja_ns,
         "profil": os.environ.get("PROFIL", "domyslny"),
-        "cpu_nadajnik": lim["cpu"],
-        "_cpuset_nadajnik": lim["cpuset"],
+        "cpu_nadajnik": lim["cpu"], "_cpuset_nadajnik": lim["cpuset"],
         "_ram_nadajnik_MB": lim["ram_MB"],
         "_wersja_cryptography": cryptography.__version__,
     }
     print(json.dumps(metryki))
-    sock.close()
 
 
 if __name__ == "__main__":

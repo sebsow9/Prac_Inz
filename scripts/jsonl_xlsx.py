@@ -21,10 +21,10 @@ import re
 import shutil
 import sys
 
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 
 JSONL = sys.argv[1] if len(sys.argv) > 1 else "results/pomiary.jsonl"
-XLSX = sys.argv[2] if len(sys.argv) > 2 else "h264_pomiary.xlsx"
+XLSX = sys.argv[2] if len(sys.argv) > 2 else "pomiary.xlsx"
 ARKUSZ = "Pomiary"
 
 # Kolumny wyliczane formula w arkuszu - nigdy nie nadpisywane wartoscia.
@@ -69,8 +69,6 @@ def rozciagnij_formuly(ws, zrodlo, cel, kolumny):
 def main():
     if not os.path.exists(JSONL):
         raise SystemExit(f"brak pliku {JSONL}")
-    if not os.path.exists(XLSX):
-        raise SystemExit(f"brak pliku {XLSX}")
 
     rekordy = []
     with open(JSONL, encoding="utf-8") as fh:
@@ -83,7 +81,18 @@ def main():
             except json.JSONDecodeError as e:
                 print(f"  pomijam linie {i} ({e})")
 
-    wb = load_workbook(XLSX)
+    if os.path.exists(XLSX):
+        wb = load_workbook(XLSX)
+    else:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = ARKUSZ
+        headers = list(dict.fromkeys(k for r in rekordy for k in r if not k.startswith("_")))
+        if "nr" not in headers:
+            raise SystemExit("Brak pomiarow do utworzenia arkusza")
+        ws.append(headers)
+        ws.freeze_panes = "A2"
+
     if ARKUSZ not in wb.sheetnames:
         raise SystemExit(f"arkusz '{ARKUSZ}' nie istnieje (sa: {wb.sheetnames})")
     ws = wb[ARKUSZ]
@@ -145,8 +154,12 @@ def main():
         wiersz += 1
         dodane += 1
 
-    shutil.copyfile(XLSX, XLSX + ".bak")
-    wb.save(XLSX)
+    if dodane:
+        if os.path.exists(XLSX):
+            shutil.copyfile(XLSX, XLSX + ".bak")
+        temporary = XLSX + ".tmp.xlsx"
+        wb.save(temporary)
+        os.replace(temporary, XLSX)
 
     print(f"dodane: {dodane}, juz byly: {pominiete}")
     if nieznane:

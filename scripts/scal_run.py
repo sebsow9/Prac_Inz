@@ -14,24 +14,11 @@ Opcjonalne:
 
 import json
 import os
-import re
 import subprocess
 import sys
 
 SCRATCH = os.environ["SCRATCH"]
 JSONL = os.environ.get("JSONL", "results/pomiary.jsonl")
-
-
-def klatki(sciezka):
-    """Liczba zdekodowanych klatek wideo. None gdy pliku nie ma."""
-    if not sciezka or not os.path.exists(sciezka):
-        return None
-    out = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames",
-         "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", sciezka],
-        capture_output=True, text=True,
-    ).stdout.strip()
-    return int(out) if out.isdigit() else None
 
 
 def commit():
@@ -42,32 +29,6 @@ def commit():
         return None
 
 
-def vmaf(sciezka):
-    if not os.path.exists(sciezka):
-        return None
-    try:
-        with open(sciezka) as fh:
-            return round(json.load(fh)["pooled_metrics"]["vmaf"]["mean"], 4)
-    except (ValueError, KeyError):
-        return None
-
-
-def srednia_z_logu(sciezka, wzorzec):
-    """Srednia metryki z per-klatkowego logu ffmpeg."""
-    if not os.path.exists(sciezka):
-        return None
-    wartosci = []
-    with open(sciezka) as fh:
-        for linia in fh:
-            m = re.search(wzorzec, linia)
-            if m:
-                try:
-                    wartosci.append(float(m.group(1)))
-                except ValueError:
-                    pass
-    return round(sum(wartosci) / len(wartosci), 4) if wartosci else None
-
-
 def main():
     run_id = sys.argv[1]
 
@@ -76,14 +37,33 @@ def main():
     with open(f"{SCRATCH}/receiver.json") as fh:
         r = json.load(fh)
 
+    with open(f"{SCRATCH}/quality.json") as fh:
+        q = json.load(fh)
+    for variable, actual in [("SENDER_CPUS", s.get("cpu_nadajnik")),
+                             ("RECEIVER_CPUS", r.get("cpu_odbiornik"))]:
+        requested = os.environ.get(variable)
+        if requested and (actual is None or abs(float(requested) - actual) > 0.0005):
+            raise RuntimeError(f"Niezgodny limit CPU: {variable}={requested}, cgroup={actual}")
+
+    if s.get("transport", "raw") != r.get("transport", "raw"):
+        raise RuntimeError("Sender/receiver transport mismatch")
+
     rekord = {
         "nr": run_id,
+        "Batch": os.environ.get("SERIES_ID", "kontrola"),
+        "jakosc_status": q["status"],
         "data": os.environ.get("RUN_TS"),
         "commit": commit(),
         "wideo": s["wideo"],
         "tryb_szyfru": s["tryb_szyfru"],
         "tryb_wymiany": s["tryb_wymiany"],
         "chunk_B": s["chunk_B"],
+        "transport": s.get("transport", "raw"),
+        "rtp_packet_B": s.get("rtp_packet_B"),
+        "bajty_udp": s.get("bajty_udp"),
+        "_max_datagram_B": s.get("_max_datagram_B"),
+        "rtp_io": s.get("rtp_io"),
+        "_rtcp": s.get("_rtcp"),
         "profil": s.get("profil"),
         "cpu_nadajnik": s.get("cpu_nadajnik"),
         "cpu_odbiornik": r.get("cpu_odbiornik"),
@@ -97,15 +77,19 @@ def main():
         "pakiety_wyslane": s["pakiety_wyslane"],
         "pakiety_odebrane": r["pakiety_odebrane"],
         "opoznienie_ms": r.get("opoznienie_ms"),
-        "klatki_ref": klatki(os.environ.get("REF_MP4")),
-        "klatki_wy": klatki(os.environ.get("OUT_MP4")),
-        "vmaf": vmaf(f"{SCRATCH}/vmaf.json"),
-        "psnr_dB": srednia_z_logu(f"{SCRATCH}/psnr.log", r"psnr_avg:([0-9.]+)"),
-        "ssim": srednia_z_logu(f"{SCRATCH}/ssim.log", r"All:([0-9.]+)"),
+        "klatki_ref": q["klatki_ref"],
+        "klatki_wy": q["klatki_wy"],
+        "vmaf": q.get("vmaf"),
+        "psnr_dB": q.get("psnr_dB"),
+        "ssim": q.get("ssim"),
+        "_fps": q["fps"],
+        "_jakosc_metoda": "pelna_transmisja; pary_klatek_Y4M; PSNR_z_MSE",
+        "_kolejnosc_ok": r.get("_kolejnosc_ok"),
         # diagnostyka - importer pomija klucze z podkreslnikiem
         "_pakiety_odrzucone": r.get("pakiety_odrzucone"),
         "_opoznienie_p95_ms": r.get("_opoznienie_p95_ms"),
         "_opoznienie_n": r.get("_opoznienie_n"),
+        "_domkniecie_odbiornika_ms": r.get("_domkniecie_odbiornika_ms"),
         "_transmisja_ns": s.get("transmisja_ns"),
         "_cpuset_nadajnik": s.get("_cpuset_nadajnik"),
         "_cpuset_odbiornik": r.get("_cpuset_odbiornik"),

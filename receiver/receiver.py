@@ -11,6 +11,8 @@ import struct
 import subprocess
 import time
 
+from transport import validate_config, validate_rtp, video_sink
+
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.asymmetric.mlkem import MLKEM768PublicKey
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -19,17 +21,19 @@ from cryptography.hazmat.primitives.padding import PKCS7
 from diffiehellman import DiffieHellman
 import statistics
 
-RESULTS = "/results"
+RESULTS = os.environ.get("RESULTS_DIR", "/results")
 RUN_ID = os.environ.get("RUN_ID", "run")
 OUTPUT = os.environ.get("OUTPUT", "/results/output.mp4")
 FPS = os.environ.get("FPS", "30")
 CIPHER = os.environ.get("CIPHER", "xor")
 KEX = os.environ.get("KEX", "wspoldzielony")
 CHUNK_B = int(os.environ.get("CHUNK_B", "1388"))
+TRANSPORT = os.environ.get("TRANSPORT", "rtp")
+RTP_PACKET_B = int(os.environ.get("RTP_PACKET_B", "1400"))
 
 PORT_RX = 4445
 PORT_TX = 4446
-BUF = CHUNK_B + 256  # zapas na IV/nonce/tag/padding
+BUF = max(CHUNK_B, RTP_PACKET_B, 8192) + 256  # zapas na IV/nonce/tag/padding
 
 # --------------------------------------------------------------- docker
 def _czytaj(sciezka):
@@ -159,79 +163,79 @@ def podsumuj_opoznienia(wartosci_ns):
     return (statistics.median(w) / 1e6, p95 / 1e6, statistics.fmean(w) / 1e6)
 
 def main():
+    validate_config(TRANSPORT, RTP_PACKET_B)
+    os.makedirs(RESULTS, exist_ok=True)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1 << 22)
     sock.bind(("", PORT_RX))
     sock.settimeout(60)
-
     try:
         pierwszy, addr = bariera(sock)
         klucz = wymiana_klucza(sock, KEX, pierwszy, addr)
-    except socket.timeout:
-        raise SystemExit("receiver: sender nie odezwal sie w 60 s")
-    odszyfruj = zrob_deszyfr(CIPHER, klucz)
-
-    ffmpeg = ["ffmpeg", "-y", "-r", FPS, "-f", "h264", "-i", "pipe:0",
-              "-c", "copy", OUTPUT]
-    proc = subprocess.Popen(
-        ffmpeg, stdin=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-    )
-
-    sock.settimeout(5)
-    pakiety = 0
-    bledy = 0
-    t_pierwszy = None
-    t_ostatni = None
-    deszyfrowanie_ns = 0
-    opoznienia = []
-    try:
-        while True:
-            try:
-                data, _a = sock.recvfrom(BUF)
-                t_odbior = time.perf_counter_ns()
-            except socket.timeout:
-                break
-            if data == b"FIN":
-                break
-            if t_pierwszy is None:
-                t_pierwszy = time.perf_counter_ns()
-            t_ostatni = time.perf_counter_ns()
-            try:
-                t_a = time.perf_counter_ns()
-                jawne = odszyfruj(data)
-                deszyfrowanie_ns += time.perf_counter_ns() - t_a
-                seq, t_wyslania = struct.unpack("!IQ", jawne[:12])
+        odszyfruj = zrob_deszyfr(CIPHER, klucz)
+        log_path = f"{RESULTS}/{RUN_ID}.decoder.log"
+        pakiety = bledy = deszyfrowanie_ns = 0
+        t_pierwszy = t_ostatni = t_koniec = None
+        opoznienia = []
+        oczekiwany_seq = 0
+        kolejnosc_ok = True
+        zakonczenie = "timeout"
+        with video_sink(TRANSPORT, OUTPUT, FPS, log_path) as deliver:
+            sock.sendto(b"READY", (addr[0], PORT_TX))
+            sock.settimeout(5)
+            while True:
+                try:
+                    data, _a = sock.recvfrom(BUF)
+                    t_odbior = time.perf_counter_ns()
+                except socket.timeout:
+                    t_koniec = time.perf_counter_ns()
+                    break
+                if data == b"FIN":
+                    zakonczenie = "FIN"
+                    t_koniec = t_odbior
+                    break
+                if t_pierwszy is None:
+                    t_pierwszy = t_odbior
+                t_ostatni = t_odbior
+                try:
+                    t_a = time.perf_counter_ns()
+                    jawne = odszyfruj(data)
+                    deszyfrowanie_ns += time.perf_counter_ns() - t_a
+                    seq, t_wyslania = struct.unpack("!IQ", jawne[:12])
+                    packet = jawne[12:]
+                    if TRANSPORT == "rtp":
+                        validate_rtp(packet, RTP_PACKET_B)
+                except (InvalidTag, ValueError, struct.error):
+                    bledy += 1
+                    continue
+                if seq != oczekiwany_seq:
+                    kolejnosc_ok = False
+                oczekiwany_seq = seq + 1
                 opoznienia.append(t_odbior - t_wyslania)
-                proc.stdin.write(jawne[12:])
-            except (InvalidTag, ValueError, struct.error):
-                # zgubiony/uszkodzony pakiet - AEAD odrzuca, CBC/ECB moze
-                # wywalic sie na paddingu. Liczymy i jedziemy dalej.
-                bledy += 1
-                continue
-            pakiety += 1
+                deliver(packet)
+                pakiety += 1
+        domkniecie_ms = (time.perf_counter_ns() - t_koniec) / 1e6
+    except socket.timeout:
+        raise SystemExit("receiver: sender did not finish the handshake in time")
     finally:
-        proc.stdin.close()
-        proc.wait()
         sock.close()
     lim = limity_cpu()
     med, p95, sr = podsumuj_opoznienia(opoznienia)
     if med is not None and med < 0:
-        # ujemne opoznienie = zegary nadajnika i odbiornika nieporownywalne
-        # (kontenery na roznych hostach). Lepiej puste niz bzdura.
         med = p95 = sr = None
     metryki = {
-        "run_id": RUN_ID,
-        "pakiety_odebrane": pakiety,
-        "pakiety_odrzucone": bledy,
+        "run_id": RUN_ID, "transport": TRANSPORT,
+        "rtp_io": "loopback-udp" if TRANSPORT == "rtp" else None,
+        "pakiety_odebrane": pakiety, "pakiety_odrzucone": bledy,
+        "_kolejnosc_ok": kolejnosc_ok, "_zakonczenie": zakonczenie,
+        "_domkniecie_odbiornika_ms": round(domkniecie_ms, 4),
         "odbior_ns": (t_ostatni - t_pierwszy) if t_pierwszy else None,
         "opoznienie_ms": round(med, 4) if med is not None else None,
         "_opoznienie_p95_ms": round(p95, 4) if p95 is not None else None,
         "_opoznienie_sr_ms": round(sr, 4) if sr is not None else None,
-         "_opoznienie_n": len(opoznienia),
+        "_opoznienie_n": len(opoznienia),
         "deszyfrowanie_ns": deszyfrowanie_ns,
-        "cpu_odbiornik": lim["cpu"],
-        "_cpuset_odbiornik": lim["cpuset"],
+        "cpu_odbiornik": lim["cpu"], "_cpuset_odbiornik": lim["cpuset"],
         "_ram_odbiornik_MB": lim["ram_MB"],
     }
     print(json.dumps(metryki))
