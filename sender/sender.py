@@ -218,10 +218,13 @@ def main():
             raise RuntimeError("Receiver did not confirm video readiness")
         szyfruj = zrob_szyfr(CIPHER, klucz)
         pakiety = bajty_pt = bajty_udp = szyfrowanie_ns = max_udp = 0
+        first_rtp_timestamp = None
         t_start = time.perf_counter_ns()
         log_path = f"{RESULTS}/{RUN_ID}.encoder.log"
         with video_source(ffmpeg, TRANSPORT, RTP_PACKET_B, CHUNK_B, log_path) as chunks:
             for seq, chunk in enumerate(chunks):
+                if TRANSPORT == "rtp" and first_rtp_timestamp is None:
+                    first_rtp_timestamp = struct.unpack("!I", chunk[4:8])[0]
                 t_a = time.perf_counter_ns()
                 naglowek = struct.pack("!IQ", seq, t_a)
                 payload = szyfruj(naglowek + chunk)
@@ -244,6 +247,7 @@ def main():
         "wideo": os.path.splitext(os.path.basename(INPUT))[0],
         "tryb_szyfru": CIPHER, "tryb_wymiany": KEX,
         "transport": TRANSPORT,
+        "_rtp_first_timestamp": first_rtp_timestamp,
         "chunk_B": CHUNK_B if TRANSPORT == "raw" else None,
         "rtp_packet_B": RTP_PACKET_B if TRANSPORT == "rtp" else None,
         "rtp_io": "loopback-udp" if TRANSPORT == "rtp" else None,

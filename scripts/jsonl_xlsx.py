@@ -98,6 +98,12 @@ def main():
     ws = wb[ARKUSZ]
 
     hr, kolumny = znajdz_naglowek(ws)
+    # Add method/coverage columns even to workbooks created before this patch.
+    for name in ('jakosc_metoda', 'klatki_porownane', 'transmisja_status', 'jakosc_blad'):
+        if name not in kolumny and any(name in record for record in rekordy):
+            column = ws.max_column + 1
+            ws.cell(row=hr, column=column).value = name
+            kolumny[name] = column
     kol_liczone = [kolumny[n] for n in LICZONE if n in kolumny]
     kol_wejsciowe = [c for n, c in kolumny.items() if n not in LICZONE]
 
@@ -165,7 +171,7 @@ def main():
     if nieznane:
         print("klucze bez kolumny w arkuszu (pominiete): " + ", ".join(sorted(nieznane)))
     if ostrzezenia:
-        print("NIEZGODNA liczba klatek - te przebiegi odrzuc przy analizie jakosci:")
+        print("NIEZGODNA liczba klatek - interpretuj wedlug jakosc_metoda i klatki_porownane:")
         for o in ostrzezenia:
             print("  " + o)
     print(f"kopia zapasowa: {XLSX}.bak")

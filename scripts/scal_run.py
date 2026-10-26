@@ -83,7 +83,12 @@ def main():
         "psnr_dB": q.get("psnr_dB"),
         "ssim": q.get("ssim"),
         "_fps": q["fps"],
-        "_jakosc_metoda": "pelna_transmisja; pary_klatek_Y4M; PSNR_z_MSE",
+        "jakosc_metoda": q.get("metoda"),
+        "klatki_porownane": q.get("klatki_porownane", 0),
+        "transmisja_status": q.get("transmisja_status"),
+        "jakosc_blad": q.get("blad"),
+        "_jakosc_metoda": q.get("metoda"),
+        "_rtp_offset_s": q.get("rtp_offset_s"),
         "_kolejnosc_ok": r.get("_kolejnosc_ok"),
         # diagnostyka - importer pomija klucze z podkreslnikiem
         "_pakiety_odrzucone": r.get("pakiety_odrzucone"),

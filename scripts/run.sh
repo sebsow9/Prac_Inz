@@ -39,7 +39,10 @@ RUN_ID="${RUN_ID:-$(date -u +%Y%m%d-%H%M%S)-${TRANSPORT}-p${RTP_PACKET_B}-${CIPH
 # ---------------------------------------------------------- katalog roboczy
 # Wszystko posrednie laduje tutaj i znika przy wyjsciu ze skryptu, takze po
 # przerwaniu Ctrl+C. W results/ zostaje wylacznie pomiary.jsonl.
-SCRATCH="$(mktemp -d)"
+SCRATCH="$(mktemp -d)" || {
+echo "BLAD: nie mozna utworzyc kat tym $TMPDIR" >&2
+exit 1
+}
 sprzataj() {
     if [ "${ZACHOWAJ_PLIKI:-0}" = "1" ]; then
         echo "pliki posrednie: $SCRATCH" >&2
@@ -60,7 +63,7 @@ OUT_W_KONTENERZE="/results/.tmp_${RUN_ID}.mp4"
 OUT_NA_HOSCIE="${PROJ}/results/.tmp_${RUN_ID}.mp4"
 
 FPS=$(ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate \
-      -of csv=p=0 "$SRC_MP4")
+      -of json "$SRC_MP4" | python3 -c 'import json,sys; print(json.load(sys.stdin)["streams"][0]["r_frame_rate"])') || exit 1
 python3 -c 'from fractions import Fraction; import sys; assert Fraction(sys.argv[1]) > 0' "$FPS" || exit 1
 
 echo "== ${RUN_ID} (transport=${TRANSPORT}, RTPmax=${RTP_PACKET_B}B, szyfr=${CIPHER}, wymiana=${KEX}, profil=${PROFIL}, netem=${NETEM_DELAY_MS}ms/${NETEM_LOSS_PCT}%, fps=${FPS})"
@@ -123,7 +126,9 @@ then
 fi
 
 mv "$OUT_NA_HOSCIE" "$OUT_MP4" 2>/dev/null || {
-    echo "BLAD: brak pliku wyjsciowego" >&2; exit 1; }
+    echo "UWAGA: brak filmu; zapisuje metryki transportu" >&2
+    : > "$OUT_MP4"
+}
 
 # ------------------------------------------------------------------ jakosc
 # Wszystkie metryki korzystaja z tej samej pary klatek. Przy niepelnej

@@ -61,7 +61,7 @@ def video_source(ffmpeg, transport, packet_size, chunk_size, log_path):
         try:
             if transport == "rtp":
                 local = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                local.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 << 20)
+                local.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 16 << 20)
                 local.bind(("127.0.0.1", 0))
                 local.settimeout(0.1)
                 port = local.getsockname()[1]
@@ -144,10 +144,10 @@ def video_sink(transport, output, fps, log_path):
                     sock.close()
                 command = ["ffmpeg", "-nostdin", "-y", "-loglevel", "warning",
                     "-protocol_whitelist", "file,udp,rtp", "-fflags", "+genpts",
-                    "-buffer_size", str(4 << 20), "-reorder_queue_size", "0",
-                    "-max_delay", "0", "-listen_timeout", "2",
-                    "-analyzeduration", "100000", "-fpsprobesize", "0", "-r", fps, "-i", str(sdp),
-                    "-c", "copy", output]
+                    "-buffer_size", str(16 << 20), "-reorder_queue_size", "0",
+                    "-max_delay", "0", "-listen_timeout", "500",
+                    "-analyzeduration", "100000", "-fpsprobesize", "0", "-copyts", "-i", str(sdp),
+                    "-c", "copy", "-avoid_negative_ts", "disabled", output]
                 process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stderr=errors)
                 deadline = time.monotonic() + 10
                 while _udp_queue(port) is None:
@@ -176,10 +176,24 @@ def video_sink(transport, output, fps, log_path):
                     ["ffmpeg", "-nostdin", "-y", "-r", fps, "-f", "h264",
                      "-i", "pipe:0", "-c", "copy", output],
                     stdin=subprocess.PIPE, stderr=errors)
-                yield process.stdin.write
-                process.stdin.close()
-            if process.wait(timeout=30):
-                raise RuntimeError(f"FFmpeg receiver failed; see {log_path}")
+                pipe_failed = False
+
+                def deliver_raw(packet):
+                    nonlocal pipe_failed
+                    if not pipe_failed:
+                        try:
+                            process.stdin.write(packet)
+                        except BrokenPipeError:
+                            pipe_failed = True
+                yield deliver_raw
+                try:
+                    process.stdin.close()
+                except BrokenPipeError:
+                    pass
+            exit_code = process.wait(timeout=30)
+            if exit_code:
+                # Keep transport data even when loss prevents decoding.
+                errors.write(f"\nFFmpeg receiver exit code: {exit_code}\n".encode())
         finally:
             if process:
                 _stop(process)

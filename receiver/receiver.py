@@ -179,10 +179,11 @@ def main():
         opoznienia = []
         oczekiwany_seq = 0
         kolejnosc_ok = True
+        first_rtp_timestamp = None
         zakonczenie = "timeout"
         with video_sink(TRANSPORT, OUTPUT, FPS, log_path) as deliver:
             sock.sendto(b"READY", (addr[0], PORT_TX))
-            sock.settimeout(5)
+            sock.settimeout(500)
             while True:
                 try:
                     data, _a = sock.recvfrom(BUF)
@@ -205,6 +206,8 @@ def main():
                     packet = jawne[12:]
                     if TRANSPORT == "rtp":
                         validate_rtp(packet, RTP_PACKET_B)
+                        if first_rtp_timestamp is None:
+                            first_rtp_timestamp = struct.unpack("!I", packet[4:8])[0]
                 except (InvalidTag, ValueError, struct.error):
                     bledy += 1
                     continue
@@ -225,6 +228,7 @@ def main():
         med = p95 = sr = None
     metryki = {
         "run_id": RUN_ID, "transport": TRANSPORT,
+        "_rtp_first_timestamp": first_rtp_timestamp,
         "rtp_io": "loopback-udp" if TRANSPORT == "rtp" else None,
         "pakiety_odebrane": pakiety, "pakiety_odrzucone": bledy,
         "_kolejnosc_ok": kolejnosc_ok, "_zakonczenie": zakonczenie,
